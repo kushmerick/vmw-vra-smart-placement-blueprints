@@ -1,6 +1,6 @@
 formatVersion: 1
 name: unique-name-dsb-social
-version: 2
+version: 3
 inputs:
   requestor:
     type: string
