@@ -1,5 +1,5 @@
 formatVersion: 1
-name: dsb-tool-v1
+name: dsb-social
 version: 1
 inputs:
   requestor:
@@ -115,7 +115,7 @@ resources:
               LOG=/var/log/dsb.log
               echo "`date` - Manager registering users and construct social graphs" >> $LOG 2>&1
               SOCIAL_GRAPH_INITIALIZATION_STATUS=999
-              while [ $SOCIAL_GRAPH_INITIALIZATION_STATUS -ne 0 ] 
+              while [ $SOCIAL_GRAPH_INITIALIZATION_STATUS -ne 0 ]
               do
                 echo "`date` - SOCIAL_GRAPH_INITIALIZATION_STATUS=$SOCIAL_GRAPH_INITIALIZATION_STATUS" >> $LOG 2>&1
                 echo "`date` - Starting python3 scripts/init_social_graph.py..." >> $LOG 2>&1
@@ -142,7 +142,6 @@ resources:
           - /root/wait-for-workers.sh >> $LOG 2>&1
           - echo "`date` - Manager starting ${input.application}" >> $LOG 2>&1
           - docker stack deploy -c $DOCKER_COMPOSE_YML '${input.application}' >> $LOG 2>&1
-          
           # for DeathStarBench social network application
           - cd $SOCIAL_NETWORK_HOME
           - echo "`date` - Manager registering users and construct social graphs" >> $LOG 2>&1
@@ -209,12 +208,10 @@ resources:
           - echo "`date` - Worker ${count.index} starting setup" >> $LOG 2>&1
           #- hostnamectl set-hostname dsb-worker[${count.index}] >> $LOG 2>&1
           - hostnamectl set-hostname '${self.name}'-[${count.index}] >> $LOG 2>&1
-          
           ## need to mount DeathStarBench files for containers (nginx-thrift, media-frontend)
           - cd /root
           - echo "`date` - Manager cloning" >> $LOG 2>&1
           - git clone https://github.com/delimitrou/DeathStarBench >> $LOG 2>&1
-
           - echo "`date` - Worker ${count.index} registering with manager" >> $LOG 2>&1
           - /root/register-with-manager.sh >> $LOG 2>&1
           - echo "`date` - Worker ${count.index} setup complete" >> $LOG 2>&1
