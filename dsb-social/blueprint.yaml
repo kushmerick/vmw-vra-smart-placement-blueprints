@@ -1,10 +1,10 @@
 formatVersion: 1
-name: unique-name-dsb-social
-version: 3
+name: dsb-social
+version: 6
 inputs:
   requestor:
     type: string
-    default: XX
+    default: aa
     minLength: 2
     maxLength: 2
   vmsize:
