@@ -1,0 +1,263 @@
+formatVersion: 1
+name: dsb-media0
+version: 1
+inputs:
+  requestor:
+    type: string
+    default: aa
+    minLength: 2
+    maxLength: 2
+  vmsize:
+    type: string
+    default: medium
+    enum:
+      - tiny
+      - small
+      - medium
+      - large
+      - xlarge
+  workers:
+    type: integer
+    default: 0
+    minimum: 0
+  application:
+    type: string
+    default: media0
+    enum:
+      - media0
+  num-threads:
+    type: integer
+    default: 100
+    title: bench parameter. Number of Threads
+  num-conns:
+    type: integer
+    default: 200
+    title: bench parameter. Number of Connections
+  bench-duration:
+    type: integer
+    default: 600
+    title: bench parameter. Duration of benchmark (sec)
+  reqs-per-sec:
+    type: integer
+    default: 1000
+    title: bench parameter. Request per second (sec)
+  syslog-protocol:
+    type: string
+    enum:
+      - udp
+      - tcp
+    default: udp
+  syslog-address:
+    type: string
+    default: symphony.licf.vmware.com
+  syslog-port:
+    type: integer
+    default: 514
+resources:
+  manager:
+    type: Cloud.vSphere.Machine
+    metadata:
+      layoutPosition:
+        - 0
+        - 0
+    account: magna
+    properties:
+      flavor: '${input.vmsize}'
+      image: ubuntu2004
+      name: 'dsb-${input.application}-${input.requestor}-manager-${substring(env.deploymentId,0,8)}'
+      cloudConfig: |
+        #cloud-config
+        ssh_pwauth: yes
+        repo_update: true
+        repo_upgrade: all
+        package_update: true
+        package_upgrade: all
+        packages:
+          - sshpass
+          - net-tools
+          - docker.io
+          - docker-compose
+          - luarocks # for DSB
+          - libz-dev
+          - libssl-dev
+          - python3-aiohttp ## for DSB-social network's initiate_social_graph.py
+          - make # for wrk (benchmark tool)
+          - luajit # for Media application
+          
+        write_files:
+          - content: |
+              #!/bin/sh
+              ### wrk benchmark test ###
+              LOG=/root/apps.log
+              HOME=/root/DeathStarBench/mediaMicroservices
+              echo "`date` - kill previous benchmark test... " >> $LOG 2>&1
+              killall --verbose --signal 9 wrk >> $LOG 2>&1
+              echo "`date` - new benchmark started... " >> $LOG 2>&1
+              nohup $HOME/wrk2/wrk -D exp -t '${input.num-threads}' -c '${input.num-conns}' -d '${input.bench-duration}' -L -s $HOME/wrk2/scripts/media-microservices/compose-review.lua http://localhost:8080/wrk2-api/review/compose -R '${input.reqs-per-sec}' >> $LOG 2>&1&
+            path: /root/apps.sh
+            permissions: 755
+          - content: |
+              #!/bin/sh
+              ### edit crontab for wrk.sh ###
+              crontab -l > /tmp/crontab.tmp
+              echo "*/10 * * * * /root/apps.sh" >> /tmp/crontab.tmp
+              if crontab -u root /tmp/crontab.tmp
+              then
+                echo "crontab install is done successfully" 
+              else
+                echo "crontab install is failed"
+              fi
+            path: /root/cron-edit.sh
+            permissions: 755
+          - content: |
+              #!/bin/sh
+              ### wating for all worker node joined ###
+              LOG=/var/log/dsb.log
+              workers=0
+              while [ $workers -lt ${input.workers} ]
+              do
+                echo "`date` - Manaager waiting for ${input.workers} workers but found $workers" >> $LOG 2>&1
+                sleep 15
+                echo "`date` - Manager looking for nodes" >> $LOG 2>&1
+                docker node ls >> $LOG 2>&1
+                workers=$(expr $(docker node ls | grep -v ID | wc -l) - 1) # exclude manager
+              done
+              echo "`date` - Manager found $wrkrs workers" >> $LOG 2>&1
+            path: /root/wait-for-workers.sh
+            permissions: 755
+          - content: |
+              #!/bin/sh
+              LOG=/var/log/dsb.log
+              HOME=/root/DeathStarBench/mediaMicroservices
+              APP='${input.application}'
+              echo "`date` - Manager registering users and construct social graphs" >> $LOG 2>&1
+              INIT_STATUS=999
+              while [ $INIT_STATUS -ne 0 ] 
+              do
+                echo "`date` - INIT_STATUS=$INIT_STATUS" >> $LOG 2>&1
+                echo "`date` - Starting python3 scripts..." >> $LOG 2>&1
+                cd $HOME
+                python3 scripts/write_movie_info.py -c ./datasets/tmdb/casts.json -m ./datasets/tmdb/movies.json && scripts/register_users.sh && scripts/register_movies.sh  >> $LOG 2>&1
+                INIT_STATUS=$?
+                echo "`date` - INIT_STATUS=$INIT_STATUS" >> $LOG 2>&1
+              done
+            path: /root/init-script.sh
+            permissions: 755
+        runcmd:
+          - LOG=/var/log/dsb.log
+          - echo "`date` - Manager starting setup" >> $LOG 2>&1
+          - hostnamectl set-hostname '${self.name}' >> $LOG 2>&1
+          - luarocks install luasocket >> $LOG 2>&1
+          ## symbolic link from libluajit-5.1 to libluajit
+          #- ln -s /usr/lib/x86_64-linux-gnu/libluajit-5.1.so /usr/lib/x86_64-linux-gnu/libluajit.so
+          - echo "`date` - Configuring Docker" >> $LOG 2>&1
+          - systemctl enable docker
+          - echo '{"log-driver":"syslog","log-opts":{"syslog-address":"${input.syslog-protocol}://${input.syslog-address}:${input.syslog-port}","tag":"magna-smart-placement-zoo/application=${input.application}/deployment=${substring(env.deploymentId,0,8)}/{{.ImageName}}/{{.Name}}/{{.ID}}"}}' > /etc/docker/daemon.json
+          - service docker restart
+          - cd /root
+          - echo "`date` - Manager cloning" >> $LOG 2>&1
+          - git clone https://github.com/delimitrou/DeathStarBench >> $LOG 2>&1
+          - echo "`date` - Manager initializing swarm" >> $LOG 2>&1
+          - docker swarm init >> $LOG 2>&1
+          - echo "`date` = Manager waiting for workers" >> $LOG 2>&1
+          - /root/wait-for-workers.sh >> $LOG 2>&1
+
+          ### for Media Microservices application
+          - echo "`date` - Manager starting ${input.application}" >> $LOG 2>&1
+          - MEDIA_HOME=/root/DeathStarBench/mediaMicroservices
+          - MEDIA_DOCKER_COMPOSE_YML=$MEDIA_HOME/docker-compose.yml
+          - cd $MEDIA_HOME
+          - docker stack deploy -c $MEDIA_DOCKER_COMPOSE_YML '${input.application}' >> $LOG 2>&1
+          - echo "`date` - Manager registering users and construct social graphs" >> $LOG 2>&1
+          - /root/init-script.sh >> $LOG 2>&1
+
+          - cd $MEDIA_HOME/wrk2
+          - echo "`date` - Manager making load generator" >> $LOG 2>&1
+          - mv wrk wrk.org
+          - make clean  >> $LOG 2>&1
+          - make >> $LOG 2>&1
+
+          # register cronjob
+          - echo "`date` - Manager starting load generator" >> $LOG 2>&1
+          - /root/cron-edit.sh >> $LOG 2>&1
+          - echo "`date` - Manager setup complete" >> $LOG 2>&1
+      networks:
+        - network: '${resource.network.id}'
+  workers:
+    type: Cloud.vSphere.Machine
+    dependsOn:
+      - manager
+    metadata:
+      layoutPosition:
+        - 0
+        - 1
+    properties:
+      count: '${input.workers}'
+      flavor: '${input.vmsize}'
+      image: ubuntu2004
+      name: 'dsb-${input.application}-${input.requestor}-workers-${substring(env.deploymentId,0,8)}'
+      cloudConfig: |
+        #cloud-config
+        ssh_pwauth: yes
+        repo_update: true
+        repo_upgrade: all
+        package_update: true
+        package_upgrade: all
+        packages: # TODO: Remove uneeded packages
+          - sshpass
+          - net-tools
+          - docker.io
+          - docker-compose
+        write_files:
+          - content: |
+              #!/bin/sh
+              success=0
+              while [ $success -eq 0 ]
+              do
+                SWARM_MGR_IP='${resource.manager.networks[0].address}'
+                echo "`date` - Worker ${count.index} registering with Manager at $SWARM_MGR_IP"
+                sshpass -p 'VMware1!' ssh -o StrictHostKeyChecking=no root@$SWARM_MGR_IP docker swarm join-token worker|sed -n 3P > /tmp/swarmjoin.sh
+                if [ $? -eq 0 ]
+                  then
+                    sh /tmp/swarmjoin.sh
+                    if [ $? -eq 0 ]
+                    then
+                      success=1
+                    else
+                      sleep 15
+                    fi
+                  fi
+                done
+                echo "`date` - Worker ${count.index} registered with manager"
+            path: /root/register-with-manager.sh
+            permissions: 755
+        runcmd:
+          - LOG=/var/log/dsb.log
+          - echo "`date` - Worker ${count.index} starting setup" >> $LOG 2>&1
+          #- hostnamectl set-hostname dsb-worker[${count.index}] >> $LOG 2>&1
+          - hostnamectl set-hostname '${self.name}'-[${count.index}] >> $LOG 2>&1
+          - echo "`date` - Configuring Docker" >> $LOG 2>&1
+          - systemctl enable docker
+          - echo '{"log-driver":"syslog","log-opts":{"syslog-address":"${input.syslog-protocol}://${input.syslog-address}:${input.syslog-port}","tag":"magna-smart-placement-zoo/application=${input.application}/deployment=${substring(env.deploymentId,0,8)}/{{.ImageName}}/{{.Name}}/{{.ID}}"}}' > /etc/docker/daemon.json
+          - service docker restart
+          ## To mount DeathStarBench files for containers 
+          ## - For social networkk : nginx-thrift, media-frontend
+          ## - For media microservcice : dns-media, nginx-web-server
+          - cd /root
+          - echo "`date` - Manager cloning" >> $LOG 2>&1
+          - git clone https://github.com/delimitrou/DeathStarBench >> $LOG 2>&1
+
+          - echo "`date` - Worker ${count.index} registering with manager" >> $LOG 2>&1
+          - /root/register-with-manager.sh >> $LOG 2>&1
+          - echo "`date` - Worker ${count.index} setup complete" >> $LOG 2>&1
+      networks:
+        - network: '${resource.network.id}'
+  network:
+    type: Cloud.vSphere.Network
+    metadata:
+      layoutPosition:
+        - 1
+        - 0
+    properties:
+      networkType: existing
+      name: vmnet
