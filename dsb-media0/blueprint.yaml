@@ -203,7 +203,7 @@ resources:
         repo_upgrade: all
         package_update: true
         package_upgrade: all
-        packages: # TODO: Remove uneeded packages
+        packages:
           - sshpass
           - net-tools
           - docker.io
@@ -215,16 +215,15 @@ resources:
               while [ $success -eq 0 ]
               do
                 SWARM_MGR_IP='${resource.manager.networks[0].address}'
+                sleep 15
                 echo "`date` - Worker ${count.index} registering with Manager at $SWARM_MGR_IP"
                 sshpass -p 'VMware1!' ssh -o StrictHostKeyChecking=no root@$SWARM_MGR_IP docker swarm join-token worker|sed -n 3P > /tmp/swarmjoin.sh
-                if [ $? -eq 0 ]
+                if [ $? -eq 0 ] && [ -s /tmp/swarmjoin.sh ]
                   then
                     sh /tmp/swarmjoin.sh
                     if [ $? -eq 0 ]
                     then
                       success=1
-                    else
-                      sleep 15
                     fi
                   fi
                 done
