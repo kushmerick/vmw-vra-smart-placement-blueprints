@@ -1,6 +1,6 @@
 formatVersion: 1
 name: dsb-hotel0
-version: 1
+version: 2
 inputs:
   requestor:
     type: string
