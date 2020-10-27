@@ -1,6 +1,6 @@
 formatVersion: 1
 name: dsb-social
-version: 7
+version: 9
 inputs:
   requestor:
     type: string
