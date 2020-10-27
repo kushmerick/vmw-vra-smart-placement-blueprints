@@ -1,6 +1,6 @@
 formatVersion: 1
-name: dsb-hotel0
-version: 4
+name: pet-clinic
+version: 2
 inputs:
   requestor:
     type: string
@@ -9,9 +9,9 @@ inputs:
     maxLength: 2
   vmsize:
     type: string
-    default: medium
+    default: small
     enum:
-      - tiny
+      #- tiny # too small
       - small
       - medium
       - large
@@ -22,25 +22,9 @@ inputs:
     minimum: 0
   application:
     type: string
-    default: hotel0
+    default: clinic
     enum:
-      - hotel0
-  num-threads:
-    type: integer
-    default: 100
-    title: bench parameter. Number of Threads
-  num-conns:
-    type: integer
-    default: 200
-    title: bench parameter. Number of Connections
-  bench-duration:
-    type: integer
-    default: 600
-    title: bench parameter. Duration of benchmark (sec)
-  reqs-per-sec:
-    type: integer
-    default: 1000
-    title: bench parameter. Request per second (sec)
+      - clinic
   syslog-protocol:
     type: string
     enum:
@@ -67,51 +51,15 @@ resources:
       name: 'dsb-${input.application}-${input.requestor}-manager-${substring(env.deploymentId,0,8)}'
       cloudConfig: |
         #cloud-config
-        ssh_pwauth: yes
         repo_update: true
         repo_upgrade: all
-        package_update: true
-        package_upgrade: all
         packages:
-          - sshpass
-          - net-tools
           - docker.io
           - docker-compose
-          - luarocks # for DSB
-          - libz-dev
-          - libssl-dev
-          - python3-aiohttp ## for DSB-social network's initiate_social_graph.py
-          - make # for wrk (benchmark tool)
         write_files:
           - content: |
               #!/bin/sh
-              ### wrk benchmark test ###
-              LOG=/root/hotel_apps.log
-              HOME=/root/DeathStarBench/hotelReservation
-              APP='${input.application}'
-              echo "`date` - kill previous benchmark test... " >> $LOG 2>&1
-              killall --verbose --signal 9 wrk >> $LOG 2>&1
-              echo "`date` - new benchmark started... " >> $LOG 2>&1
-              nohup $HOME/wrk2/wrk -D exp -t '${input.num-threads}' -c '${input.num-conns}' -d '${input.bench-duration}' -L -s $HOME/wrk2_lua_scripts/mixed-workload_type_1.lua http://localhost:5000 -R '${input.reqs-per-sec}' >> $LOG 2>&1&
-            path: /root/apps.sh
-            permissions: 755
-          - content: |
-              #!/bin/sh
-              ### edit crontab for wrk.sh ###
-              crontab -l > /tmp/crontab.tmp
-              echo "*/10 * * * * /root/apps.sh" >> /tmp/crontab.tmp
-              if crontab -u root /tmp/crontab.tmp
-              then
-                echo "crontab install is done successfully" 
-              else
-                echo "crontab install is failed"
-              fi
-            path: /root/cron-edit.sh
-            permissions: 755
-          - content: |
-              #!/bin/sh
-              ### just wating for all worker node joined before "docker stack deploy"###
-              LOG=/var/log/dsb.log
+              LOG=/var/log/app.log
               workers=0
               while [ $workers -lt ${input.workers} ]
               do
@@ -125,46 +73,39 @@ resources:
             path: /root/wait-for-workers.sh
             permissions: 755
         runcmd:
-          - LOG=/var/log/dsb.log
+          - LOG=/var/log/app.log
           - echo "`date` - Manager starting setup" >> $LOG 2>&1
           - hostnamectl set-hostname '${self.name}' >> $LOG 2>&1
-          - luarocks install luasocket >> $LOG 2>&1
           - echo "`date` - Configuring Docker" >> $LOG 2>&1
+          - sysctl -w vm.max_map_count=262144
           - systemctl enable docker
           - echo '{"log-driver":"syslog","log-opts":{"syslog-address":"${input.syslog-protocol}://${input.syslog-address}:${input.syslog-port}","tag":"magna-smart-placement-zoo/application=${input.application}/deployment=${substring(env.deploymentId,0,8)}/{{.ImageName}}/{{.Name}}/{{.ID}}"}}' > /etc/docker/daemon.json
           - service docker restart
           - cd /root
           - echo "`date` - Manager cloning" >> $LOG 2>&1
-          - git clone https://github.com/delimitrou/DeathStarBench >> $LOG 2>&1
+          - git clone https://github.com/michaelhyatt/spring-petclinic-elastic-apm  >> $LOG 2>&1
           - echo "`date` - Manager initializing swarm" >> $LOG 2>&1
           - docker swarm init >> $LOG 2>&1
-          - echo "`date` - Manager waiting for workers" >> $LOG 2>&1
+          - echo "`date` = Manager waiting for workers" >> $LOG 2>&1
           - /root/wait-for-workers.sh >> $LOG 2>&1
-
-          ### for Hotel Reservation application
-          #- MGR_IP=${self.networks.address}
-          - MGR_IP=$(/sbin/ip -o -4 addr list ens160 | awk '{print $4}' | cut -d/ -f1)
-          - echo "$MGR_IP" > /root/swarm_mgr_ip
-          - HOTEL_HOME=/root/DeathStarBench/hotelReservation
-          - HOTEL_DOCKER_COMPOSE_YML=$HOTEL_HOME/docker-compose.yml
-          - cd $HOTEL_HOME  >> $LOG 2>&1
-          - cp config.json config.json.org  >> $LOG 2>&1
-          - sed -i 's/x.x.x.x/'$MGR_IP'/g' config.json  >> $LOG 2>&1
-          - cp docker-compose.yml docker-compose.yml.org  >> $LOG 2>&1
-          - sed -i '/version/s/2/3/' docker-compose.yml  >> $LOG 2>&1
-          - sed -i '/cpuset/d' docker-compose.yml  >> $LOG 2>&1
-          #### Some service image(s) must be built from source by running:
-          #### docker-compose build recommendation geo reservation profile user search frontend rate
-          - docker-compose build --no-cache
-          - docker stack deploy -c $HOTEL_DOCKER_COMPOSE_YML '${input.application}' >> $LOG 2>&1
-          # for hotel reservation's load-gen becuase wrk source files are missing under hotel reservation application.
-          - (cd /root/DeathStarBench/socialNetwork; tar cvpf - ./wrk2)| tar xvpf -  >> $LOG 2>&1
-          - cd $HOTEL_HOME/wrk2
-          - make >> $LOG 2>&1
-
-          # register cronjob
-          - echo "`date` - Manager starting load generator" >> $LOG 2>&1
-          - /root/cron-edit.sh >> $LOG 2>&1
+          - echo "`date` - Manager preparing ${input.application}" >> $LOG 2>&1
+          - cd /root/spring-petclinic-elastic-apm
+          - mkdir tmp
+          - # make volumes mountable on remote nodes
+          - sed -i -e 's|- ./|- /root/spring-petclinic-elastic-apm/|' docker-compose.yml
+          - cat docker-compose.yml >> $LOG 2>&1
+          - echo "`date` - Docker-Compose YAML..." >> $LOG 2>&1
+          - # generate heavier load and fix apm_server typo
+          - sed -i -e 's|@every 5s|@every 1s|' heartbeat.docker.yml
+          - sed -i -e 's/apm_server/apm-server/' heartbeat.docker.yml
+          - echo "`date` - Heartbeat.Docker YAML..." >> $LOG 2>&1
+          - cat heartbeat.docker.yml >> $LOG 2>&1
+          - # fix nginx typo
+          - sed -i -e 's/apm_server/apm-server/' nginx.conf
+          - echo "`date` - NGINX Config..." >> $LOG 2>&1
+          - cat nginx.conf >> $LOG 2>&1
+          - echo "`date` - Manager starting ${input.application}" >> $LOG 2>&1
+          - TAG=7.3.0 docker stack deploy -c docker-compose.yml ${input.application} >> $LOG 2>&1
           - echo "`date` - Manager setup complete" >> $LOG 2>&1
           - logger --sd-id ${input.application}@0 --sd-param deployment=\"${substring(env.deploymentId,0,8)}\" --sd-param source=\"cloudinit\" -n ${input.syslog-address} -P ${input.syslog-port} --${input.syslog-protocol} < $LOG
       networks:
@@ -184,14 +125,12 @@ resources:
       name: 'dsb-${input.application}-${input.requestor}-workers-${substring(env.deploymentId,0,8)}'
       cloudConfig: |
         #cloud-config
-        ssh_pwauth: yes
         repo_update: true
         repo_upgrade: all
         package_update: true
         package_upgrade: all
-        packages: # TODO: Remove uneeded packages
+        packages:
           - sshpass
-          - net-tools
           - docker.io
           - docker-compose
         write_files:
@@ -217,20 +156,29 @@ resources:
             path: /root/register-with-manager.sh
             permissions: 755
         runcmd:
-          - LOG=/var/log/dsb.log
+          - LOG=/var/log/app.log
           - echo "`date` - Worker ${count.index} starting setup" >> $LOG 2>&1
-          #- hostnamectl set-hostname dsb-worker[${count.index}] >> $LOG 2>&1
           - hostnamectl set-hostname '${self.name}'-[${count.index}] >> $LOG 2>&1
           - echo "`date` - Configuring Docker" >> $LOG 2>&1
+          - sysctl -w vm.max_map_count=262144
           - systemctl enable docker
           - echo '{"log-driver":"syslog","log-opts":{"syslog-address":"${input.syslog-protocol}://${input.syslog-address}:${input.syslog-port}","tag":"magna-smart-placement-zoo/application=${input.application}/deployment=${substring(env.deploymentId,0,8)}/{{.ImageName}}/{{.Name}}/{{.ID}}"}}' > /etc/docker/daemon.json
           - service docker restart
-
-          ## need to mount DeathStarBench files for containers (nginx-thrift, media-frontend)
+          - echo "`date` - Worker cloning" >> $LOG 2>&1
           - cd /root
-          - echo "`date` - Manager cloning" >> $LOG 2>&1
-          - git clone https://github.com/delimitrou/DeathStarBench >> $LOG 2>&1
-
+          - git clone https://github.com/michaelhyatt/spring-petclinic-elastic-apm  >> $LOG 2>&1
+          - echo "`date` - Worker preparing ${input.application}" >> $LOG 2>&1
+          - cd spring-petclinic-elastic-apm
+          - mkdir tmp
+          - # generate heavier load and fix apm_server typo
+          - sed -i -e 's|@every 5s|@every 1s|' heartbeat.docker.yml
+          - sed -i -e 's/apm_server/apm-server/' heartbeat.docker.yml
+          - echo "`date` - Heartbeat.Docker YAML..." >> $LOG 2>&1
+          - cat heartbeat.docker.yml >> $LOG 2>&1
+          - # fix nginx typo
+          - sed -i -e 's/apm_server/apm-server/' nginx.conf
+          - echo "`date` - NGINX Config..." >> $LOG 2>&1
+          - cat nginx.conf >> $LOG 2>&1
           - echo "`date` - Worker ${count.index} registering with manager" >> $LOG 2>&1
           - /root/register-with-manager.sh >> $LOG 2>&1
           - echo "`date` - Worker ${count.index} setup complete" >> $LOG 2>&1
@@ -243,6 +191,4 @@ resources:
       layoutPosition:
         - 1
         - 0
-    properties:
-      networkType: existing
-      name: vmnet
+    properties: {}

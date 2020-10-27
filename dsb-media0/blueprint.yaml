@@ -1,6 +1,6 @@
 formatVersion: 1
 name: dsb-media0
-version: 2
+version: 4
 inputs:
   requestor:
     type: string
@@ -181,6 +181,7 @@ resources:
           - echo "`date` - Manager starting load generator" >> $LOG 2>&1
           - /root/cron-edit.sh >> $LOG 2>&1
           - echo "`date` - Manager setup complete" >> $LOG 2>&1
+          - logger --sd-id ${input.application}@0 --sd-param deployment=\"${substring(env.deploymentId,0,8)}\" --sd-param source=\"cloudinit\" -n ${input.syslog-address} -P ${input.syslog-port} --${input.syslog-protocol} < $LOG
       networks:
         - network: '${resource.network.id}'
   workers:
@@ -249,6 +250,7 @@ resources:
           - echo "`date` - Worker ${count.index} registering with manager" >> $LOG 2>&1
           - /root/register-with-manager.sh >> $LOG 2>&1
           - echo "`date` - Worker ${count.index} setup complete" >> $LOG 2>&1
+          - logger --sd-id ${input.application}@0 --sd-param deployment=\"${substring(env.deploymentId,0,8)}\" --sd-param source=\"cloudinit\" -n ${input.syslog-address} -P ${input.syslog-port} --${input.syslog-protocol} < $LOG
       networks:
         - network: '${resource.network.id}'
   network:

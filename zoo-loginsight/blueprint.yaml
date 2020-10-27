@@ -1,0 +1,321 @@
+formatVersion: 1
+name: zoo-loginsight
+version: 4
+inputs:
+  requestor:
+    type: string
+    default: aa
+  flavor:
+    type: string
+    default: large
+    enum:
+      # - tiny  # LI is
+      # - small # a hog
+      - medium
+      - large
+      - xlarge
+  application:
+    type: string
+    default: logins
+  workers:
+    type: integer
+    default: 0
+  admin_password:
+    type: string
+    default: VMware1!VMware1!
+  loginsight_license:
+    type: string
+    default: 4J2TK-DE092-082W1-0A822-2XMLP
+  log:
+    type: string
+    default: /var/log/zoo.log
+  etg_jar:
+    type: string
+    default: 'https://magna-generic-local.artifactory.eng.vmware.com/magna-generic-local/mpred/leo-assembly-1.9.0-SNAPSHOT.jar'
+  query_generator_qps:
+    type: integer
+    default: 1
+  syslog-protocol:
+    type: string
+    enum:
+      - udp
+      - tcp
+    default: udp
+  syslog-address:
+    type: string
+    default: symphony.licf.vmware.com
+  syslog-port:
+    type: integer
+    default: 514
+resources:
+  master:
+    type: Cloud.vSphere.Machine
+    metadata:
+      layoutPosition:
+        - 0
+        - 0
+    properties:
+      name: 'dsb-${input.application}-${input.requestor}-master0-${substring(env.deploymentId,0,8)}'
+      image: loginsight
+      flavor: '${input.flavor}'
+      networks:
+        - network: '${resource.network.id}'
+      cloudConfig: |
+        #cloud-config
+        write_files:
+          - content: |
+              #!/bin/sh
+              echo "`date` - Starting to initialize master" >> ${input.log} 2>&1
+              # step 1: new deployment
+              status=1
+              while [ $status -ne 0 ]
+              do
+                sleep 15
+                echo "`date` - Step 1 - New deployment" >> ${input.log} 2>&1
+                curl -s -S -k -f -d '{"user":{"userName":"admin","password":"${input.admin_password}","email":"admin@example.com"}}' -H 'Content-Type: application/json' https://localhost:9543/api/v1/deployment/new > /tmp/new 2>&1
+                status=$?
+                echo "`date` - Step 1 response - status=$status, payload..." >> ${input.log} 2>&1
+                cat /tmp/new >> ${input.log} 2>&1
+              done
+              echo "`date` - Step 1 successful" >> ${input.log} 2>&1
+              # step 2: wait until started
+              status=1
+              while [ $status -ne 0 ]
+              do
+                sleep 15
+                echo "`date` - Step 2: Waiting until master is started" >> ${input.log} 2>&1
+                curl -s -S -k -f -X POST https://localhost:9543/api/v1/deployment/waitUntilStarted > /tmp/wait 2>&1
+                status=$?
+                echo "`date` - Step 2 response: status=$status, payload..." >> ${input.log} 2>&1
+                cat /tmp/wait >> ${input.log} 2>&1
+              done
+              echo "`date` - Step 2 successful" >> ${input.log} 2>&1
+              # step 3: log in
+              status=1
+              while [ $status -ne 0 ]
+              do
+                sleep 15
+                echo "`date` - Step 3: Logging in" >> ${input.log} 2>&1
+                curl -s -S -k -f -d '{"username":"admin","password":"${input.admin_password}","provider":"Local"}' -H 'Content-Type: application/json' https://localhost:9543/api/v1/sessions > /tmp/login 2>&1
+                status=$?
+                echo "`date` - Step 3 response: status=$status, payload..." >> ${input.log} 2>&1
+                cat /tmp/login >> ${input.log} 2>&1
+              done
+              sessionId=`jq -r .sessionId < /tmp/login`
+              echo "`date` - Step 3 successful: sessionId=$sessionId" >> ${input.log} 2>&1
+              # step 4: install license
+              status=1
+              while [ $status -ne 0 ]
+              do
+                sleep 15
+                echo "`date` - Step 4: Installing license" >> ${input.log} 2>&1
+                curl -s -S -k -f -d '{"key":"${input.loginsight_license}"}' -H "Authorization: Bearer $sessionId" https://localhost:9543/api/v1/licenses > /tmp/licence 2>&1
+                status=$?
+                echo "`date` - Step 4 response: status=$status, payload..." >> ${input.log} 2>&1
+                cat /tmp/licence >> ${input.log} 2>&1
+              done
+              echo "`date` - Step 4 successful" >> ${input.log} 2>&1
+              echo "`date` - Successfully initialized master" >> ${input.log} 2>&1
+            path: /root/zoo-loginsight-initialize-master.sh
+            permissions: 755
+          - content: |
+              #!/bin/sh
+              echo "`date` - Generating load" >> ${input.log} 2>&1
+              java -cp /root/etg.jar com.vmware.saasops.analytics.util.EventTypeGen -b | awk 'f;/events from the templates/{f=1}' | logger -n localhost >> ${input.log} 2>&1
+              echo "`date` - Generated load" >> ${input.log} 2>&1
+            path: /root/zoo-loginsight-load-generator.sh
+            permissions: 755
+          - content: |
+              #!/bin/sh
+              Q=`expr ${input.query_generator_qps} \* 120` # query-generator cron job runs every 2 minutes
+              echo "`date` - Generating $Q queries" >> ${input.log} 2>&1
+              for i in `seq 1 $Q`
+              do
+                curl -s -S -k -f -d '{"username":"admin","password":"${input.admin_password}","provider":"Local"}' -H 'Content-Type: application/json' https://localhost:9543/api/v1/sessions > /tmp/login 2>&1
+                status=$?
+                if [ $status -eq 0 ]
+                then
+                  sessionId=`jq -r .sessionId < /tmp/login`
+                  # silly but effective queries: query #i --> count of all messages that contain i
+                  curl -s -S -k -f -H "Authorization: Bearer $sessionId" https://localhost:9543/api/v1/aggregated-events/timestamp/GT+0/text/CONTAINS+$i > /tmp/query 2>&1
+                  status=$?
+                  if [ $status -ne 0 ]
+                  then
+                    echo "`date` - Query FAILED: status=$status, payload..." >> ${input.log} 2>&1
+                    cat /tmp/query >> ${input.log} 2>&1
+                  fi
+                else
+                  echo "`date` - Login FAILED: status=$status, payload..." >> ${input.log} 2>&1
+                  cat /tmp/login >> ${input.log} 2>&1
+                fi
+              done
+              echo "`date` - Generated queries" >> ${input.log} 2>&1
+            path: /root/zoo-loginsight-query-generator.sh
+            permissions: 755
+        runcmd:
+          - echo "`date` - Master starting setup" >> ${input.log} 2>&1
+          - hostnamectl set-hostname '${self.name}' >> ${input.log} 2>&1
+          - status=1
+          - while [ $status -ne 0 ] # await network stability?
+          - do
+          -   sleep 15
+          -   echo "`date` - Installing JQ" >> ${input.log} 2>&1
+          -   tdnf -y install jq >> ${input.log} 2>&1 # `packages: [jq]` fails :-(
+          -   status=$?
+          - done
+          - echo "`date` - Initializing master" >> ${input.log} 2>&1
+          - /root/zoo-loginsight-initialize-master.sh
+          - echo "`date` - Master initialized" >> ${input.log} 2>&1
+          - echo "`date` - Master starting load generator" >> ${input.log} 2>&1
+          - curl -o /root/etg.jar ${input.etg_jar} # TODO? Retry due to network flakiness?
+          - (crontab -l 2>/dev/null; echo "*/5 * * * * /root/zoo-loginsight-load-generator.sh >> ${input.log} 2>&1") | crontab -
+          - (crontab -l 2>/dev/null; echo "*/2 * * * * /root/zoo-loginsight-query-generator.sh >> ${input.log} 2>&1") | crontab -
+          - crontab -l >> ${input.log} 2>&1
+          - echo "`date` - Master started load generator" >> ${input.log} 2>&1
+          - echo "`date` - Manager setup complete" >> ${input.log} 2>&1
+          - logger --sd-id ${input.application}@0 --sd-param deployment=\"${substring(env.deploymentId,0,8)}\" --sd-param source=\"cloudinit\" -n ${input.syslog-address} -P ${input.syslog-port} --${input.syslog-protocol} < ${input.log}
+  workers:
+    type: Cloud.vSphere.Machine
+    dependsOn:
+      - master
+    metadata:
+      layoutPosition:
+        - 0
+        - 1
+    properties:
+      name: 'dsb-${input.application}-${input.requestor}-workers-${substring(env.deploymentId,0,8)}'
+      count: '${input.workers}'
+      image: loginsight
+      flavor: '${input.flavor}'
+      networks:
+        - network: '${resource.network.id}'
+      cloudConfig: |
+        #cloud-config
+        write_files:
+          - content: |
+              #!/bin/sh
+              echo "`date` - Starting to join cluster" >> ${input.log} 2>&1
+              # step 1: wait until master is started
+              status=1
+              while [ $status -ne 0 ]
+              do
+                sleep 15
+                echo "`date` - Step 1: Waiting until master is started" >> ${input.log} 2>&1
+                curl -s -S -k -f -X POST https://${resource.master.networks[0].address}:9543/api/v1/deployment/waitUntilStarted > /tmp/wait 2>&1
+                status=$?
+                echo "`date` - Step 1 response: status=$status, payload..." >> ${input.log} 2>&1
+                cat /tmp/wait >> ${input.log} 2>&1
+              done
+              echo "`date` - Step 1 successful" >> ${input.log} 2>&1
+              # step 2: join
+              status=1
+              while [ $status -ne 0 ]
+              do
+                sleep 15
+                echo "`date` - Step 2: Join" >> ${input.log} 2>&1
+                curl -s -S -k -f -d '{"masterFQDN":"${resource.master.networks[0].address}"}' https://localhost:9543/api/v1/deployment/join > /tmp/join 2>&1
+                status=$?
+                echo "`date` - Step 2 response: status=$status, payload..." >> ${input.log} 2>&1
+                cat /tmp/join >> ${input.log} 2>&1
+              done
+              workerAddress=`jq -r .workerAddress < /tmp/join`
+              workerPort=`jq -r .workerPort < /tmp/join`
+              workerToken=`jq -r .workerToken < /tmp/join`
+              echo "`date` - Step 2 successful: workerAddress=$workerAddress; workerPort=$workerPort; workerToken=$workerToken" >> ${input.log} 2>&1
+              # step 3 & 4: log in to master then approve worker joining cluster - re-authenticating each time so our session doesn't expire
+              status=1
+              while [ $status -ne 0 ]
+              do
+                sleep 15
+                # step 3: log in to master
+                echo "`date` - Step 3: Logging in to master" >> ${input.log} 2>&1
+                curl -s -S -k -f -d '{"username":"admin","password":"${input.admin_password}","provider":"Local"}' -H 'Content-Type: application/json' https://${resource.master.networks[0].address}:9543/api/v1/sessions > /tmp/login 2>&1
+                status=$?
+                echo "`date` - Step 3 response: status=$status, payload..." >> ${input.log} 2>&1
+                cat /tmp/login >> ${input.log} 2>&1
+                if [ $status -eq 0 ]
+                then
+                  sessionId=`jq -r .sessionId < /tmp/login`
+                  echo "`date` - Step 3 successful: sessionId=$sessionId" >> ${input.log} 2>&1
+                  # step 4: approve worker joining cluster
+                  echo "`date` - Step 4: Approving request for workerAddress=$workerAddress; workerPort=$workerPort; workerToken=$workerToken" >> ${input.log} 2>&1
+                  curl -s -S -k -f -d "{\"workerAddress\":\"$workerAddress\",\"workerPort\":$workerPort,\"workerToken\":\"$workerToken\",\"approved\":\"true\"}" -H 'Content-Type: application/json' -H "Authorization: Bearer $sessionId" https://${resource.master.networks[0].address}:9543/api/v1/deployment/approve > /tmp/approve 2>&1
+                  status=$?
+                  echo "`date` - Step 4 response: status=$status, payload..." >> ${input.log} 2>&1
+                  cat /tmp/approve >> ${input.log} 2>&1
+                  if [ $status -eq 0 ]
+                  then
+                    echo "`date` - Step 4 successful" >> ${input.log} 2>&1
+                  else
+                    echo "`date` - Step 4 FAILED" >> ${input.log} 2>&1
+                  fi
+                else
+                  echo "`date` - Step 3 FAILED" >> ${input.log} 2>&1
+                fi
+              done
+              echo "`date` - Successfully joined cluster" >> ${input.log} 2>&1
+            path: /root/zoo-loginsight-join-cluster.sh
+            permissions: 755
+          - content: |
+              #!/bin/sh
+              echo "`date` - Generating load" >> ${input.log} 2>&1
+              java -cp /root/etg.jar com.vmware.saasops.analytics.util.EventTypeGen -b | awk 'f;/events from the templates/{f=1}' | logger -n localhost >> ${input.log} 2>&1
+              echo "`date` - Generated load" >> ${input.log} 2>&1
+            path: /root/zoo-loginsight-load-generator.sh
+            permissions: 755
+          - content: |
+              #!/bin/sh
+              Q=`expr ${input.query_generator_qps} \* 120` # query-generator cron job runs every 2 minutes
+              echo "`date` - Generating $Q queries" >> ${input.log} 2>&1
+              for i in `seq 1 $Q`
+              do
+                curl -s -S -k -f -d '{"username":"admin","password":"${input.admin_password}","provider":"Local"}' -H 'Content-Type: application/json' https://localhost:9543/api/v1/sessions > /tmp/login 2>&1
+                status=$?
+                if [ $status -eq 0 ]
+                then
+                  sessionId=`jq -r .sessionId < /tmp/login`
+                  # silly but effective queries: query #i --> count of all messages that contain i
+                  curl -s -S -k -f -H "Authorization: Bearer $sessionId" https://localhost:9543/api/v1/aggregated-events/timestamp/GT+0/text/CONTAINS+$i > /tmp/query 2>&1
+                  status=$?
+                  if [ $status -ne 0 ]
+                  then
+                    echo "`date` - Query FAILED: status=$status, payload..." >> ${input.log} 2>&1
+                    cat /tmp/query >> ${input.log} 2>&1
+                  fi
+                else
+                  echo "`date` - Login FAILED: status=$status, payload..." >> ${input.log} 2>&1
+                  cat /tmp/login >> ${input.log} 2>&1
+                fi
+              done
+              echo "`date` - Generated queries" >> ${input.log} 2>&1
+            path: /root/zoo-loginsight-query-generator.sh
+            permissions: 755
+        runcmd:
+          - echo "`date` - Worker starting setup" >> ${input.log} 2>&1
+          - hostnamectl set-hostname '${self.name}' >> ${input.log} 2>&1
+          - status=1
+          - while [ $status -ne 0 ] # await network stability?
+          - do
+          -   sleep 15
+          -   echo "`date` - Installing JQ" >> ${input.log} 2>&1
+          -   tdnf -y install jq >> ${input.log} 2>&1 # `packages: [jq]` fails :-(
+          -   status=$?
+          - done
+          - echo "`date` - Joining cluster" >> ${input.log} 2>&1
+          - /root/zoo-loginsight-join-cluster.sh >> ${input.log} 2>&1
+          - echo "`date` - Cluster joined" >> ${input.log} 2>&1
+          - echo "`date` - Worker starting load generators" >> ${input.log} 2>&1
+          - curl -o /root/etg.jar ${input.etg_jar} # TODO? Retry due to network flakiness?
+          - (crontab -l 2>/dev/null; echo "*/5 * * * * /root/zoo-loginsight-load-generator.sh >> ${input.log} 2>&1") | crontab -
+          - (crontab -l 2>/dev/null; echo "*/2 * * * * /root/zoo-loginsight-query-generator.sh >> ${input.log} 2>&1") | crontab -
+          - crontab -l >> ${input.log} 2>&1
+          - echo "`date` - Worker started load generators" >> ${input.log} 2>&1
+          - echo "`date` - Worker setup complete" >> ${input.log} 2>&1
+          - logger --sd-id ${input.application}@0 --sd-param deployment=\"${substring(env.deploymentId,0,8)}\" --sd-param source=\"cloudinit\" -n ${input.syslog-address} -P ${input.syslog-port} --${input.syslog-protocol} < ${input.log}
+  network:
+    type: Cloud.vSphere.Network
+    metadata:
+      layoutPosition:
+        - 1
+        - 0
+    properties: {}
