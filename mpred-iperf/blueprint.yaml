@@ -1,0 +1,119 @@
+formatVersion: 1
+name: mpred-iperf
+version: 1
+inputs:
+  requestor:
+    type: string
+    default: zz
+    minLength: 2
+    maxLength: 2
+  vmsize:
+    type: string
+    default: small
+    enum:
+      - tiny
+      - small
+      - medium
+      - large
+      - xlarge
+  workers:
+    type: integer
+    default: 1
+    minimum: 1
+    maximum: 1
+  application:
+    type: string
+    default: iperf3
+    enum:
+      - iperf3
+  time:
+    type: integer
+    default: 0
+    title: duration
+    description: 'time in seconds to transmit, 0 is to run forever'
+  bitrate:
+    type: string
+    default: 0
+    description: 'bit/sec, 0 is no limitation'
+  syslog-protocol:
+    type: string
+    enum:
+      - udp
+      - tcp
+    default: udp
+  syslog-address:
+    type: string
+    default: symphony.licf.vmware.com
+  syslog-port:
+    type: integer
+    default: 514
+resources:
+  manager:
+    type: Cloud.vSphere.Machine
+    metadata:
+      layoutPosition:
+        - 0
+        - 0
+    properties:
+      flavor: '${input.vmsize}'
+      image: ubuntu2004
+      name: 'dsb-${input.application}-${input.requestor}-manager-${substring(env.deploymentId,0,8)}'
+      cloudConfig: |
+        #cloud-config
+        repo_update: true
+        repo_upgrade: all
+        packages:
+          - iperf3
+        write_files:
+        runcmd:
+          - LOG=/var/log/app.log
+          - echo "`date` - Manager starting setup" >> $LOG 2>&1
+          - hostnamectl set-hostname '${self.name}' >> $LOG 2>&1
+          - echo '{"log-driver":"syslog","log-opts":{"syslog-address":"${input.syslog-protocol}://${input.syslog-address}:${input.syslog-port}","tag":"magna-smart-placement-zoo/application=${input.application}/deployment=${substring(env.deploymentId,0,8)}/{{.ImageName}}/{{.Name}}/{{.ID}}"}}' > /etc/docker/daemon.json
+          - echo "`date` - Manager setup complete" >> $LOG 2>&1
+          - echo "`date` - Manager starting iperf3 server..." >> $LOG 2>&1
+          - logger --sd-id ${input.application}@0 --sd-param deployment=\"${substring(env.deploymentId,0,8)}\" --sd-param source=\"cloudinit\" -n ${input.syslog-address} -P ${input.syslog-port} --${input.syslog-protocol} < $LOG
+          - /usr/bin/iperf3 -s  >> $LOG 2>&1
+      networks:
+        - network: '${resource.network.id}'
+  workers:
+    type: Cloud.vSphere.Machine
+    dependsOn:
+      - manager
+    metadata:
+      layoutPosition:
+        - 0
+        - 1
+    properties:
+      count: '${input.workers}'
+      flavor: '${input.vmsize}'
+      image: ubuntu2004
+      name: 'dsb-${input.application}-${input.requestor}-workers-${substring(env.deploymentId,0,8)}'
+      cloudConfig: |
+        #cloud-config
+        repo_update: true
+        repo_upgrade: all
+        package_update: true
+        package_upgrade: all
+        packages:
+          - iperf3
+        write_files:
+        runcmd:
+          - LOG=/var/log/app.log
+          - echo "`date` - Worker ${count.index} starting setup" >> $LOG 2>&1
+          - hostnamectl set-hostname '${self.name}'-[${count.index}] >> $LOG 2>&1
+          - IPERF3_MGR_IP='${resource.manager.networks[0].address}'
+          - echo '{"log-driver":"syslog","log-opts":{"syslog-address":"${input.syslog-protocol}://${input.syslog-address}:${input.syslog-port}","tag":"magna-smart-placement-zoo/application=${input.application}/deployment=${substring(env.deploymentId,0,8)}/{{.ImageName}}/{{.Name}}/{{.ID}}"}}' > /etc/docker/daemon.json
+          - echo "`date` - Worker ${count.index} setup complete" >> $LOG 2>&1
+          - echo "`date` - Worker ${count.index} starting iperf3 in client mode to $IPERF3_MGR_IP..." >> $LOG 2>&1
+          - logger --sd-id ${input.application}@0 --sd-param deployment=\"${substring(env.deploymentId,0,8)}\" --sd-param source=\"cloudinit\" -n ${input.syslog-address} -P ${input.syslog-port} --${input.syslog-protocol} < $LOG
+          - /usr/bin/iperf3 -c $IPERF3_MGR_IP -t '${input.time}' -b '${input.bitrate}' -i 60 -Z -N  >> $LOG 2>&1
+      networks:
+        - network: '${resource.network.id}'
+  network:
+    type: Cloud.vSphere.Network
+    metadata:
+      layoutPosition:
+        - 1
+        - 0
+    properties: {}
