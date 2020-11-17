@@ -1,6 +1,6 @@
 formatVersion: 1
 name: mpred-iperf
-version: 1
+version: 2
 inputs:
   requestor:
     type: string
@@ -20,7 +20,7 @@ inputs:
     type: integer
     default: 1
     minimum: 1
-    maximum: 1
+    maximum: 5
   application:
     type: string
     default: iperf3
@@ -28,13 +28,10 @@ inputs:
       - iperf3
   time:
     type: integer
-    default: 0
-    title: duration
-    description: 'time in seconds to transmit, 0 is to run forever'
+    default: 0 # run foerver
   bitrate:
-    type: string
-    default: 0
-    description: 'bit/sec, 0 is no limitation'
+    type: integer
+    default: 0 # unlimited
   syslog-protocol:
     type: string
     enum:
@@ -107,7 +104,7 @@ resources:
           - echo "`date` - Worker ${count.index} setup complete" >> $LOG 2>&1
           - echo "`date` - Worker ${count.index} starting iperf3 in client mode to $IPERF3_MGR_IP..." >> $LOG 2>&1
           - logger --sd-id ${input.application}@0 --sd-param deployment=\"${substring(env.deploymentId,0,8)}\" --sd-param source=\"cloudinit\" -n ${input.syslog-address} -P ${input.syslog-port} --${input.syslog-protocol} < $LOG
-          - /usr/bin/iperf3 -c $IPERF3_MGR_IP -t '${input.time}' -b '${input.bitrate}' -i 60 -Z -N  >> $LOG 2>&1
+          - /usr/bin/iperf3 -c $IPERF3_MGR_IP -t '${input.time}' -b '${input.bitrate}'K -i 60 -Z -N  >> $LOG 2>&1
       networks:
         - network: '${resource.network.id}'
   network:
