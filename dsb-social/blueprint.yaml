@@ -1,6 +1,6 @@
 formatVersion: 1
 name: dsb-social
-version: 9
+version: 11
 inputs:
   requestor:
     type: string
@@ -154,6 +154,18 @@ resources:
           - docker swarm init >> $LOG 2>&1
           - echo "`date` = Manager waiting for workers" >> $LOG 2>&1
           - /root/wait-for-workers.sh >> $LOG 2>&1
+
+          # For using vmware corporate Harbor as a docker hub proxy
+          - HARBER=harbor-repo.vmware.com/dockerhub-proxy-cache 
+          - cd $SOCIAL_NETWORK_HOME  >> $LOG 2>&1
+          - cp docker-compose.yml docker-compose.yml.org  >> $LOG 2>&1
+          - sed -i 's|image:\ |image:\ '$HARBER'/|g' docker-compose.yml  >> $LOG 2>&1
+          - sed -i 's|image:\ '$HARBER'/mongo|image:\ '$HARBER'/library/mongo|g' docker-compose.yml  >> $LOG 2>&1
+          - sed -i 's|image:\ '$HARBER'/memcached|image:\ '$HARBER'/library/memcached|g' docker-compose.yml  >> $LOG 2>&1
+          - sed -i 's|image:\ '$HARBER'/consul|image:\ '$HARBER'/library/consul|g' docker-compose.yml  >> $LOG 2>&1
+          - sed -i 's|image:\ '$HARBER'/redis|image:\ '$HARBER'/library/redis|g' docker-compose.yml  >> $LOG 2>&1
+          - sed -i 's|image:\ '$HARBER'/rabbitmq|image:\ '$HARBER'/library/rabbitmq|g' docker-compose.yml  >> $LOG 2>&1
+
           - echo "`date` - Manager starting ${input.application}" >> $LOG 2>&1
           - docker stack deploy -c $DOCKER_COMPOSE_YML '${input.application}' >> $LOG 2>&1
           

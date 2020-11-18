@@ -1,6 +1,6 @@
 formatVersion: 1
 name: dsb-media0
-version: 4
+version: 6
 inputs:
   requestor:
     type: string
@@ -148,8 +148,6 @@ resources:
           - echo "`date` - Manager starting setup" >> $LOG 2>&1
           - hostnamectl set-hostname '${self.name}' >> $LOG 2>&1
           - luarocks install luasocket >> $LOG 2>&1
-          ## symbolic link from libluajit-5.1 to libluajit
-          #- ln -s /usr/lib/x86_64-linux-gnu/libluajit-5.1.so /usr/lib/x86_64-linux-gnu/libluajit.so
           - echo "`date` - Configuring Docker" >> $LOG 2>&1
           - systemctl enable docker
           - echo '{"log-driver":"syslog","log-opts":{"syslog-address":"${input.syslog-protocol}://${input.syslog-address}:${input.syslog-port}","tag":"magna-smart-placement-zoo/application=${input.application}/deployment=${substring(env.deploymentId,0,8)}/{{.ImageName}}/{{.Name}}/{{.ID}}"}}' > /etc/docker/daemon.json
@@ -166,6 +164,16 @@ resources:
           - echo "`date` - Manager starting ${input.application}" >> $LOG 2>&1
           - MEDIA_HOME=/root/DeathStarBench/mediaMicroservices
           - MEDIA_DOCKER_COMPOSE_YML=$MEDIA_HOME/docker-compose.yml
+
+          # For using vmware corporate Harbor as a docker hub proxy
+          - HARBER=harbor-repo.vmware.com/dockerhub-proxy-cache 
+          - cd $MEDIA_HOME  >> $LOG 2>&1
+          - cp docker-compose.yml docker-compose.yml.org  >> $LOG 2>&1
+          - sed -i 's|image:\ |image:\ '$HARBER'/|g' docker-compose.yml  >> $LOG 2>&1
+          - sed -i 's|image:\ '$HARBER'/mongo|image:\ '$HARBER'/library/mongo|g' docker-compose.yml  >> $LOG 2>&1
+          - sed -i 's|image:\ '$HARBER'/memcached|image:\ '$HARBER'/library/memcached|g' docker-compose.yml  >> $LOG 2>&1
+          - sed -i 's|image:\ '$HARBER'/radis|image:\ '$HARBER'/library/radis|g' docker-compose.yml  >> $LOG 2>&1
+
           - cd $MEDIA_HOME
           - docker stack deploy -c $MEDIA_DOCKER_COMPOSE_YML '${input.application}' >> $LOG 2>&1
           - echo "`date` - Manager registering users and construct social graphs" >> $LOG 2>&1

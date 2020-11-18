@@ -1,6 +1,6 @@
 formatVersion: 1
 name: dsb-hotel0
-version: 4
+version: 6
 inputs:
   requestor:
     type: string
@@ -153,6 +153,12 @@ resources:
           - cp docker-compose.yml docker-compose.yml.org  >> $LOG 2>&1
           - sed -i '/version/s/2/3/' docker-compose.yml  >> $LOG 2>&1
           - sed -i '/cpuset/d' docker-compose.yml  >> $LOG 2>&1
+          # For using vmware corporate Harbor as a docker hub proxy
+          - HARBER=harbor-repo.vmware.com/dockerhub-proxy-cache 
+          - sed -i 's|image:\ |image:\ '$HARBER'/|g' docker-compose.yml  >> $LOG 2>&1
+          - sed -i 's|image:\ '$HARBER'/mongo|image:\ '$HARBER'/library/mongo|g' docker-compose.yml  >> $LOG 2>&1
+          - sed -i 's|image:\ '$HARBER'/memcached|image:\ '$HARBER'/library/memcached|g' docker-compose.yml  >> $LOG 2>&1
+          - sed -i 's|image:\ '$HARBER'/consul|image:\ '$HARBER'/library/consul|g' docker-compose.yml  >> $LOG 2>&1
           #### Some service image(s) must be built from source by running:
           #### docker-compose build recommendation geo reservation profile user search frontend rate
           - docker-compose build --no-cache

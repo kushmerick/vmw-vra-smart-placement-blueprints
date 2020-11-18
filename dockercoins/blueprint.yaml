@@ -1,6 +1,6 @@
 formatVersion: 1
 name: dockercoins
-version: 8
+version: 10
 inputs:
   requestor:
     type: string
@@ -104,6 +104,13 @@ resources:
           - echo "`date` - Manager prepared Docker-Compose YAML..." >> $LOG 2>&1
           - cat docker-compose.yml >> $LOG 2>&1
           - echo "`date` - Manager building and deploying ${input.application}" >> $LOG 2>&1
+          - # For using vmware corporate Harbor as a docker hub proxy
+          - sed -i 's|FROM\ |FROM\ harbor-repo.vmware.com/dockerhub-proxy-cache/library/|g' rng/Dockerfile >> $LOG 2>&1
+          - sed -i 's|FROM\ |FROM\ harbor-repo.vmware.com/dockerhub-proxy-cache/library/|g' hasher/Dockerfile >> $LOG 2>&1
+          - sed -i 's|FROM\ |FROM\ harbor-repo.vmware.com/dockerhub-proxy-cache/library/|g' webui/Dockerfile >> $LOG 2>&1
+          - sed -i 's|FROM\ |FROM\ harbor-repo.vmware.com/dockerhub-proxy-cache/library/|g' worker/Dockerfile >> $LOG 2>&1
+          - sed -i 's|image:\ redis|image:\ harbor-repo.vmware.com/dockerhub-proxy-cache/library/redis|g' docker-compose.yml >> $LOG 2>&1
+          - # 
           - docker build rng -t rng >> $LOG 2>&1
           - docker build hasher -t hasher >> $LOG 2>&1
           - docker build webui -t webui >> $LOG 2>&1
@@ -173,6 +180,12 @@ resources:
           - git clone ${input.repo} >> $LOG 2>&1 # for webgui files
           - echo "`date` - Worker building ${input.application}" >> $LOG 2>&1
           - cd /root/dockercoins
+          - # For using vmware corporate Harbor as a docker hub proxy
+          - sed -i 's|FROM\ |FROM\ harbor-repo.vmware.com/dockerhub-proxy-cache/library/|g' rng/Dockerfile >> $LOG 2>&1
+          - sed -i 's|FROM\ |FROM\ harbor-repo.vmware.com/dockerhub-proxy-cache/library/|g' hasher/Dockerfile >> $LOG 2>&1
+          - sed -i 's|FROM\ |FROM\ harbor-repo.vmware.com/dockerhub-proxy-cache/library/|g' webui/Dockerfile >> $LOG 2>&1
+          - sed -i 's|FROM\ |FROM\ harbor-repo.vmware.com/dockerhub-proxy-cache/library/|g' worker/Dockerfile >> $LOG 2>&1
+          - #
           - docker build rng -t rng >> $LOG 2>&1
           - docker build hasher -t hasher >> $LOG 2>&1
           - docker build webui -t webui >> $LOG 2>&1

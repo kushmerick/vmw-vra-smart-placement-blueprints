@@ -1,6 +1,6 @@
 formatVersion: 1
 name: pet-clinic
-version: 2
+version: 4
 inputs:
   requestor:
     type: string
@@ -104,6 +104,10 @@ resources:
           - sed -i -e 's/apm_server/apm-server/' nginx.conf
           - echo "`date` - NGINX Config..." >> $LOG 2>&1
           - cat nginx.conf >> $LOG 2>&1
+          - # For using vmware corporate Harbor as a docker hub proxy
+          - sed -i 's|image:\ openjdk|image:\ harbor-repo.vmware.com/dockerhub-proxy-cache/library/openjdk|g' docker-compose.yml  >> $LOG 2>&1
+          - sed -i 's|image:\ nginx|image:\ harbor-repo.vmware.com/dockerhub-proxy-cache/library/nginx|g' docker-compose.yml  >> $LOG 2>&1
+          - #
           - echo "`date` - Manager starting ${input.application}" >> $LOG 2>&1
           - TAG=7.3.0 docker stack deploy -c docker-compose.yml ${input.application} >> $LOG 2>&1
           - echo "`date` - Manager setup complete" >> $LOG 2>&1
