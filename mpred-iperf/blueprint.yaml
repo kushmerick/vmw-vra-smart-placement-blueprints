@@ -1,6 +1,6 @@
 formatVersion: 1
 name: mpred-iperf
-version: 2
+version: 4
 inputs:
   requestor:
     type: string
@@ -62,6 +62,15 @@ resources:
         packages:
           - iperf3
         write_files:
+          - content: |
+              #!/bin/sh
+              for i in `seq 1 $1`
+              do
+                port=`expr 5020 + $i`
+                nohup /usr/bin/iperf3 -s -p $port &
+              done
+            path: /root/iperf.sh
+            permissions: 755
         runcmd:
           - LOG=/var/log/app.log
           - echo "`date` - Manager starting setup" >> $LOG 2>&1
@@ -70,7 +79,7 @@ resources:
           - echo "`date` - Manager setup complete" >> $LOG 2>&1
           - echo "`date` - Manager starting iperf3 server..." >> $LOG 2>&1
           - logger --sd-id ${input.application}@0 --sd-param deployment=\"${substring(env.deploymentId,0,8)}\" --sd-param source=\"cloudinit\" -n ${input.syslog-address} -P ${input.syslog-port} --${input.syslog-protocol} < $LOG
-          - /usr/bin/iperf3 -s  >> $LOG 2>&1
+          - /root/iperf.sh '${input.workers}' >> $LOG 2>&1
       networks:
         - network: '${resource.network.id}'
   workers:
@@ -86,6 +95,7 @@ resources:
       flavor: '${input.vmsize}'
       image: ubuntu2004
       name: 'dsb-${input.application}-${input.requestor}-workers-${substring(env.deploymentId,0,8)}'
+      mgripaddr: '${resource.manager.networks[0].address}'
       cloudConfig: |
         #cloud-config
         repo_update: true
@@ -95,16 +105,48 @@ resources:
         packages:
           - iperf3
         write_files:
+          - content: |
+              #!/bin/sh
+              crontab -l > /tmp/crontab.tmp
+              echo "* * * * * /root/iperf.sh" >> /tmp/crontab.tmp
+              if crontab -u root /tmp/crontab.tmp
+              then
+                echo "crontab install is done successfully"
+              else
+                echo "crontab install is failed"
+              fi
+            path: /root/cron-edit.sh
+            permissions: 755
+          - content: |
+              #!/bin/sh
+              LOG=/var/log/app.log
+              INDEX=`cat /root/INDEX`
+              PORT=`expr 5021 + $INDEX`
+              count=`ps -ef|grep iperf3|grep -v grep|wc -l`
+              if [ $count = 0 ]; then
+                echo "`date` - IPERF3 client restarting.." >> $LOG 2>&1
+                echo "/usr/bin/iperf3 -c `cat /root/IPERF_MGR_IP` -p $PORT -t 0 -b 0K -i 60 -Z -N" >> $LOG 2>&1
+                /usr/bin/iperf3 -c `cat /root/IPERF_MGR_IP` -p $PORT -t 0 -b 0K -i 60 -Z -N >> $LOG 2>&1
+                echo "iperf3 restarting.." >> $LOG 2>&1
+              else
+                echo "iperf3 process is ok" >>  $LOG 2>&1
+              fi
+            path: /root/iperf.sh
+            permissions: 755
         runcmd:
           - LOG=/var/log/app.log
-          - echo "`date` - Worker ${count.index} starting setup" >> $LOG 2>&1
+          - echo "${count.index}" >> /root/INDEX
+          - echo "`date` - Worker starting setup" >> $LOG 2>&1
           - hostnamectl set-hostname '${self.name}'-[${count.index}] >> $LOG 2>&1
+          - echo "`date` - Worker ${count.index} starting setup" >> $LOG 2>&1
           - IPERF3_MGR_IP='${resource.manager.networks[0].address}'
+          - echo "$IPERF3_MGR_IP" > /root/IPERF_MGR_IP
           - echo '{"log-driver":"syslog","log-opts":{"syslog-address":"${input.syslog-protocol}://${input.syslog-address}:${input.syslog-port}","tag":"magna-smart-placement-zoo/application=${input.application}/deployment=${substring(env.deploymentId,0,8)}/{{.ImageName}}/{{.Name}}/{{.ID}}"}}' > /etc/docker/daemon.json
           - echo "`date` - Worker ${count.index} setup complete" >> $LOG 2>&1
           - echo "`date` - Worker ${count.index} starting iperf3 in client mode to $IPERF3_MGR_IP..." >> $LOG 2>&1
           - logger --sd-id ${input.application}@0 --sd-param deployment=\"${substring(env.deploymentId,0,8)}\" --sd-param source=\"cloudinit\" -n ${input.syslog-address} -P ${input.syslog-port} --${input.syslog-protocol} < $LOG
-          - /usr/bin/iperf3 -c $IPERF3_MGR_IP -t '${input.time}' -b '${input.bitrate}'K -i 60 -Z -N  >> $LOG 2>&1
+          - /root/iperf.sh >> $LOG 2>&1
+          - /root/cron-edit.sh
       networks:
         - network: '${resource.network.id}'
   network:
